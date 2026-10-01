@@ -119,6 +119,9 @@ jobs:
         env:
           ConnectionStrings__Default: ${{ secrets.NEON_CONNECTION_STRING }}
         run: |
+          # Este trabajo corre en un runner distinto al que compilo, asi que el proyecto
+          # llega sin restaurar: sin este paso, dotnet-ef falla con NETSDK1004.
+          dotnet restore
           dotnet tool restore
           dotnet dotnet-ef database update --project src/MisFinanzas.Api
 
