@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>MisFinanzas.Importer</RootNamespace>
+    <AssemblyName>MisFinanzas.Importer</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MisFinanzas.Api\MisFinanzas.Api.csproj" />
+  </ItemGroup>
+
+</Project>

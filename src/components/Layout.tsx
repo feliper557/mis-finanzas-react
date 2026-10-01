@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { Nav } from './Nav'
+import { SaveIndicator } from './SaveIndicator'
 import type { TabId } from './Nav'
 import { Resumen } from '../tabs/Resumen'
 import { Presupuestos } from '../tabs/Presupuestos'
@@ -19,6 +20,7 @@ export function Layout() {
           <h1 className="text-base font-bold leading-tight">Mis Finanzas</h1>
           <p className="truncate text-[10px] text-white/35">{user?.email}</p>
         </div>
+        <SaveIndicator />
         <button
           onClick={() => logout()}
           className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/50 transition hover:bg-white/[0.08] active:scale-95"

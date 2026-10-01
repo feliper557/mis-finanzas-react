@@ -3,11 +3,13 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts'
 import { useData } from '../context/DataContext'
 import { Card, H3, Btn, SectionTitle } from '../components/ui'
 import { Sheet, Field, inputCls } from '../components/Sheet'
-import { fmt, invTotalV2, invPendV2, invGanV2, nextInvId, invCatColor, PALETTE, savingTotal, savingPotTotal } from '../lib/calc'
+import { fmt, invTotalV2, invPendV2, invGanV2, newId, invCatColor, PALETTE, savingTotal, savingPotTotal } from '../lib/calc'
 import type { InvCat, InvItemV2, FinanzasData } from '../types'
 
+const today = () => new Date().toISOString().slice(0, 10)
+
 type SheetState =
-  | { k: 'item'; catId: string; itemId: number | null }
+  | { k: 'item'; catId: string; itemId: string | null }
   | { k: 'cat'; catId: string | null }
   | null
 
@@ -164,6 +166,8 @@ export function Inversiones() {
 const SAVING_PALETTE = ['#34d399', '#60a5fa', '#f59e0b', '#a78bfa', '#fb7185', '#22d3ee']
 
 function AhorrosAcumulados({ pots, totalAhorrado, data }: { pots: { id: string; name: string }[]; totalAhorrado: number; data: FinanzasData }) {
+  const [retiroPot, setRetiroPot] = useState<string | null>(null)
+
   return (
     <div className="mt-3">
       <Card className="border-l-2 border-violet-500">
@@ -184,10 +188,58 @@ function AhorrosAcumulados({ pots, totalAhorrado, data }: { pots: { id: string; 
               <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: SAVING_PALETTE[i % SAVING_PALETTE.length] }} />
               <div className="min-w-0 flex-1 font-semibold">{pot.name}</div>
               <div className="font-bold text-emerald-400">{fmt(savingPotTotal(data, pot.id))}</div>
+              <Btn variant="ghost" className="text-xs px-2 py-1" onClick={() => setRetiroPot(pot.id)}>
+                Retirar
+              </Btn>
             </div>
           ))}
         </Card>
       )}
+
+      <p className="mt-2 text-[11.5px] leading-relaxed text-white/30">
+        El retiro descuenta del saldo total del bolsillo, sin importar de qué mes(es) viene el dinero ahorrado.
+      </p>
+
+      <Sheet open={!!retiroPot} onClose={() => setRetiroPot(null)}>
+        {retiroPot && (
+          <RetiroForm potId={retiroPot} potNombre={pots.find((p) => p.id === retiroPot)?.name ?? ''} onClose={() => setRetiroPot(null)} />
+        )}
+      </Sheet>
+    </div>
+  )
+}
+
+function RetiroForm({ potId, potNombre, onClose }: { potId: string; potNombre: string; onClose: () => void }) {
+  const { data, mutate } = useData()
+  const [d, setD] = useState(today())
+  const [nota, setNota] = useState('')
+  const [m, setM] = useState('')
+  const saldo = savingPotTotal(data, potId)
+
+  const retirar = () => {
+    const monto = Number(m) || 0
+    if (monto <= 0) return
+    mutate((d2) => {
+      if (!d2.savingEntries) d2.savingEntries = []
+      d2.savingEntries.push({ id: newId(), potId, nota: nota.trim(), m: -monto, d })
+    })
+    onClose()
+  }
+
+  return (
+    <div>
+      <h2 className="text-lg font-bold">Retirar de {potNombre}</h2>
+      <p className="mb-2 text-xs text-white/30">Saldo actual: {fmt(saldo)}</p>
+      <Field label="Fecha">
+        <input className={inputCls} type="date" value={d} onChange={(e) => setD(e.target.value)} />
+      </Field>
+      <Field label="Monto a retirar">
+        <input className={inputCls} type="number" value={m} onChange={(e) => setM(e.target.value)} placeholder="Ej: 700000" />
+      </Field>
+      <Field label="Nota (opcional)">
+        <input className={inputCls} value={nota} onChange={(e) => setNota(e.target.value)} placeholder="Ej: retiro para vacaciones" />
+      </Field>
+      <Btn className="mt-4 w-full" onClick={retirar}>Confirmar retiro</Btn>
     </div>
   )
 }
@@ -218,7 +270,7 @@ function InvRow({ item, onEdit }: { item: InvItemV2; onEdit: () => void }) {
   )
 }
 
-function InvItemForm({ catId, itemId, onClose }: { catId: string; itemId: number | null; onClose: () => void }) {
+function InvItemForm({ catId, itemId, onClose }: { catId: string; itemId: string | null; onClose: () => void }) {
   const { data, mutate } = useData()
   const editing = itemId != null
   const cur = editing ? (data.invItems ?? []).find((x) => x.id === itemId) : undefined
@@ -236,7 +288,7 @@ function InvItemForm({ catId, itemId, onClose }: { catId: string; itemId: number
         const idx = data2.invItems.findIndex((x) => x.id === itemId)
         if (idx !== -1) data2.invItems[idx] = { id: itemId!, ...obj }
       } else {
-        data2.invItems.push({ id: nextInvId(data2), ...obj })
+        data2.invItems.push({ id: newId(), ...obj })
       }
       data2.invItems.sort((a, b) => (a.d || '').localeCompare(b.d || ''))
     })

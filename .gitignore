@@ -4,3 +4,13 @@ dist-ssr
 *.local
 .env
 .env.local
+
+# .NET (server/)
+bin/
+obj/
+TestResults/
+*.user
+
+# Volcados de Firestore: contienen datos financieros reales, nunca al repositorio.
+firestore-backup.json
+backup-completo-*.tar.gz

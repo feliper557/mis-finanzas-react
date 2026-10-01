@@ -97,11 +97,11 @@ function LoanForm({ kind, index, onClose }: { kind: LoanKind; index: number | nu
   const [pagado, setPagado] = useState(cur?.pagado ?? false)
 
   const guardar = () => {
-    const obj: LoanItem = { q: q.trim() || '(sin nombre)', c, m: Number(m) || 0, d, pagado }
-    mutate((data2) => { if (editing) data2[kind][index] = obj; else data2[kind].push(obj) })
+    const obj: LoanItem = { id: editing ? (cur?.id ?? crypto.randomUUID()) : crypto.randomUUID(), q: q.trim() || '(sin nombre)', c, m: Number(m) || 0, d, pagado }
+    mutate((data2) => { if (editing) { const i = data2[kind].findIndex((y) => y.id === cur?.id); if (i !== -1) data2[kind][i] = obj } else data2[kind].push(obj) })
     onClose()
   }
-  const borrar = () => { mutate((data2) => { data2[kind].splice(index!, 1) }); onClose() }
+  const borrar = () => { mutate((data2) => { data2[kind] = data2[kind].filter((y) => y.id !== cur?.id) }); onClose() }
 
   return (
     <div>

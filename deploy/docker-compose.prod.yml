@@ -1,0 +1,50 @@
+# Pila de produccion para el VPS de Hostinger (1 vCPU / 4 GB) COMPARTIDO con Lactumama.
+#
+# Dos ausencias deliberadas:
+#   - No hay servicio "db": se reutiliza el PostgreSQL de Lactumama, con una base y un rol
+#     propios. Un segundo contenedor pediria otros ~1,5 GB de RAM para nada.
+#   - No hay servicio "caddy": solo un proceso puede escuchar en 80/443, y ya lo hace el suyo.
+#     Este stack no publica ni un solo puerto al exterior.
+#
+# Tampoco hay ninguna clave "build": las imagenes las construye GitHub Actions. Compilar .NET
+# o Vite en 1 vCPU dejaria sin responder a las DOS aplicaciones durante minutos.
+name: misfinanzas
+
+services:
+  misfinanzas-api:
+    image: ${IMAGE_REPO:?define IMAGE_REPO en .env}/api:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - default
+      - data      # alcance al PostgreSQL de Lactumama
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    # Los limites no son cosmetica: son la barrera que protege a Lactumama. Con un tope de
+    # cgroup, un fallo aqui mata a este contenedor dentro de su propio limite en vez de
+    # disparar al asesino OOM del kernel, que elegiria a PostgreSQL.
+    mem_limit: 384m
+    cpus: 0.5
+
+  misfinanzas-web:
+    image: ${IMAGE_REPO:?define IMAGE_REPO en .env}/web:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      - misfinanzas-api
+    networks:
+      - default
+      - edge      # alcance desde el Caddy de Lactumama
+    mem_limit: 64m
+    cpus: 0.25
+
+networks:
+  default:
+  # Creadas a mano una sola vez con "docker network create". Ver docs/handoff-lactumama.md.
+  edge:
+    external: true
+  data:
+    external: true

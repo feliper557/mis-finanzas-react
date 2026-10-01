@@ -1,89 +1,95 @@
 import { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react'
 import type { ReactNode } from 'react'
-import { doc, getDoc, setDoc } from 'firebase/firestore'
-import { db } from '../firebase'
+import { api, ApiError } from '../lib/api'
 import { useAuth } from './AuthContext'
-import { buildStarter } from '../lib/starter'
-import type { FinanzasData, InvItem } from '../types'
+import type { FinanzasData } from '../types'
+
+export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error' | 'conflict'
 
 interface DataCtx {
   data: FinanzasData
   curMes: string
   setCurMes: (k: string) => void
   mutate: (fn: (d: FinanzasData) => void) => void
+  saveStatus: SaveStatus
 }
 
 const Ctx = createContext<DataCtx | null>(null)
 
-function normalize(d: FinanzasData): FinanzasData {
-  const base = buildStarter()
-  if (d.cats == null) d.cats = base.cats
-  if (d.budget == null) d.budget = base.budget
-  ;(['months', 'tx', 'nu', 'hapi', 'novilla', 'prestamo', 'deuda'] as const).forEach((k) => {
-    const rec = d as unknown as Record<string, unknown>
-    if (!Array.isArray(rec[k])) rec[k] = []
-  })
-  if (!d.months.length) d.months = base.months
+/** Cada cuánto se comprueba si otro dispositivo escribió. Sustituye al onSnapshot de Firestore. */
+const INTERVALO_SONDEO_MS = 30_000
 
-  // Migrate cats without group field
-  d.cats.forEach((c) => { if (!c.group) c.group = 'fijos' })
-
-  // Migrate legacy investment arrays to dynamic invCats + invItems
-  if (!d.invCats) {
-    d.invCats = [{ id: 'inv', name: 'Inversión' }]
-    let nextId = 1
-    const migrateOld = (arr: InvItem[], cat: string) =>
-      arr.map((x) => ({ id: nextId++, cat, d: x.d, c: x.c, m: x.m, pend: x.pend, gan: x.gan ?? 0 }))
-    d.invItems = [
-      ...migrateOld(d.nu ?? [], 'nu_legacy'),
-      ...migrateOld(d.hapi ?? [], 'hapi_legacy'),
-      ...migrateOld(d.novilla ?? [], 'novilla_legacy'),
-    ]
-    if ((d.nu ?? []).length) d.invCats.push({ id: 'nu_legacy', name: 'NU / Ganado' })
-    if ((d.hapi ?? []).length) d.invCats.push({ id: 'hapi_legacy', name: 'ETFs (Hapi)' })
-    if ((d.novilla ?? []).length) d.invCats.push({ id: 'novilla_legacy', name: 'Novillas' })
-    d.nu = []; d.hapi = []; d.novilla = []
-  }
-  if (!Array.isArray(d.invItems)) d.invItems = []
-  if (!d.invCats.length) d.invCats = [{ id: 'inv', name: 'Inversión' }]
-
-  if (!d.savingPots) d.savingPots = [{ id: 'sp_default', name: 'Mi alcancía' }]
-  if (!Array.isArray(d.savingEntries)) d.savingEntries = []
-
-  return d
-}
+/** Ventana de agrupación de escrituras, igual que la que tenía la versión con Firestore. */
+const DEBOUNCE_MS = 500
 
 export function DataProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
   const [data, setData] = useState<FinanzasData | null>(null)
   const [curMes, setCurMes] = useState('')
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
+  const [error, setError] = useState<string | null>(null)
+
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // La revisión vive en una ref además de en el estado: persist() la lee desde dentro de un
+  // temporizador, donde el valor capturado por el closure ya estaría obsoleto.
+  const revRef = useRef(0)
+  const pendiente = useRef<FinanzasData | null>(null)
+
+  const cargar = useCallback(async () => {
+    const d = await api.get<FinanzasData>('/data')
+    revRef.current = d.rev
+    setData(d)
+    setCurMes((actual) => actual || d.months[d.months.length - 1]?.k || '')
+    return d
+  }, [])
 
   useEffect(() => {
-    if (!user) { setData(null); return }
-    let alive = true
-    ;(async () => {
-      const ref = doc(db, 'users', user.uid)
-      const snap = await getDoc(ref)
-      let d: FinanzasData
-      if (snap.exists()) d = normalize(snap.data() as FinanzasData)
-      else { d = buildStarter(); await setDoc(ref, d) }
-      if (!alive) return
-      setData(d)
-      setCurMes(d.months[d.months.length - 1].k)
-    })()
-    return () => { alive = false }
-  }, [user])
+    if (!user) {
+      setData(null)
+      setCurMes('')
+      return
+    }
+
+    let vivo = true
+    cargar().catch((e: unknown) => {
+      if (!vivo) return
+      setError(e instanceof Error ? e.message : 'No se pudieron cargar los datos.')
+    })
+
+    return () => { vivo = false }
+  }, [user, cargar])
 
   const persist = useCallback(
     (next: FinanzasData) => {
-      if (!user) return
+      pendiente.current = next
       if (saveTimer.current) clearTimeout(saveTimer.current)
-      saveTimer.current = setTimeout(() => {
-        setDoc(doc(db, 'users', user.uid), next).catch(console.error)
-      }, 500)
+      setSaveStatus('saving')
+
+      saveTimer.current = setTimeout(async () => {
+        saveTimer.current = null
+        const cuerpo = pendiente.current
+        pendiente.current = null
+        if (!cuerpo) return
+
+        try {
+          const { rev } = await api.put<{ rev: number }>('/data', { ...cuerpo, rev: revRef.current })
+          revRef.current = rev
+          setSaveStatus('saved')
+          setTimeout(() => setSaveStatus((s) => (s === 'saved' ? 'idle' : s)), 2000)
+        } catch (e) {
+          // Un 409 significa que otro dispositivo guardó primero. Antes, con Firestore, esta
+          // misma situación sobreescribía el documento entero y se perdían datos en silencio.
+          // Ahora se recarga el estado del servidor y se avisa en vez de pisar nada.
+          if (e instanceof ApiError && e.code === 'revision_conflict') {
+            setSaveStatus('conflict')
+            await cargar().catch(() => undefined)
+            return
+          }
+          setSaveStatus('error')
+        }
+      }, DEBOUNCE_MS)
     },
-    [user],
+    [cargar],
   )
 
   const mutate = useCallback(
@@ -99,6 +105,42 @@ export function DataProvider({ children }: { children: ReactNode }) {
     [persist],
   )
 
+  // Sondeo de la revisión: barato (devuelve un entero) y suficiente para una app personal.
+  // Se comprueba al volver a la pestaña, que es cuando de verdad importa, y cada 30 s.
+  useEffect(() => {
+    if (!user || !data) return
+
+    const comprobar = async () => {
+      // Con una escritura en vuelo el servidor va por detrás: recargar pisaría lo que el
+      // usuario acaba de escribir.
+      if (saveTimer.current || document.hidden) return
+
+      try {
+        const { rev } = await api.get<{ rev: number }>('/data/rev')
+        if (rev !== revRef.current) await cargar()
+      } catch {
+        // Un sondeo fallido no es motivo para molestar: el siguiente lo reintenta.
+      }
+    }
+
+    const id = setInterval(comprobar, INTERVALO_SONDEO_MS)
+    window.addEventListener('focus', comprobar)
+    return () => {
+      clearInterval(id)
+      window.removeEventListener('focus', comprobar)
+    }
+  }, [user, data, cargar])
+
+  if (error && !data)
+    return (
+      <div className="grid min-h-screen place-items-center px-6 text-center text-sm text-white/40">
+        <div>
+          <p className="mb-2 text-white/70">No se pudieron cargar tus datos.</p>
+          <p className="text-xs">{error}</p>
+        </div>
+      </div>
+    )
+
   if (!data)
     return (
       <div className="grid min-h-screen place-items-center text-white/40 text-sm">
@@ -108,7 +150,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   return (
     <Ctx.Provider
-      value={{ data, curMes: curMes || data.months[data.months.length - 1].k, setCurMes, mutate }}
+      value={{ data, curMes: curMes || data.months[data.months.length - 1]?.k || '', setCurMes, mutate, saveStatus }}
     >
       {children}
     </Ctx.Provider>

@@ -25,21 +25,15 @@ export const spentCat = (d: FinanzasData, k: string, cat: string) =>
   d.tx.filter((t) => t.k === k && t.cat === cat).reduce((s, t) => s + t.m, 0)
 export const budgetTotal = (d: FinanzasData) => d.cats.reduce((s, c) => s + (d.budget[c.id] || 0), 0)
 
-export const invTotal = (d: FinanzasData) =>
-  d.nu.filter((x) => !x.pend).reduce((s, x) => s + x.m, 0) +
-  d.hapi.filter((x) => !x.pend).reduce((s, x) => s + x.m, 0) +
-  d.novilla.filter((x) => !x.pend && !x.vendida).reduce((s, x) => s + x.m, 0)
-
-export const invPend = (d: FinanzasData) =>
-  (['nu', 'hapi', 'novilla'] as const).reduce(
-    (s, t) => s + d[t].filter((x) => x.pend).reduce((a, x) => a + x.m, 0),
-    0,
-  )
-
 export const pendiente = (d: FinanzasData, t: 'prestamo' | 'deuda') =>
   d[t].filter((x) => !x.pagado).reduce((s, x) => s + x.m, 0)
 
-export const nextTxId = (d: FinanzasData) => Math.max(0, ...d.tx.map((t) => t.id || 0)) + 1
+/**
+ * Identificador de un elemento nuevo. Es un UUID generado en el cliente: a diferencia del
+ * antiguo Math.max(...) + 1, dos dispositivos que crean un gasto a la vez ya no colisionan.
+ * El servidor lo acepta tal cual como clave primaria.
+ */
+export const newId = () => crypto.randomUUID()
 export const groupCats = (d: FinanzasData, g: CatGroup) => d.cats.filter((c) => c.group === g)
 export const mTotalGroup = (d: FinanzasData, k: string, g: CatGroup) => {
   const ids = new Set(groupCats(d, g).map((c) => c.id))
@@ -53,8 +47,6 @@ export const invPendV2 = (d: FinanzasData) =>
   (d.invItems ?? []).filter((x) => x.pend).reduce((s, x) => s + x.m, 0)
 export const invGanV2 = (d: FinanzasData) =>
   (d.invItems ?? []).reduce((s, x) => s + (x.gan ?? 0), 0)
-export const nextInvId = (d: FinanzasData) =>
-  Math.max(0, ...(d.invItems ?? []).map((x) => x.id)) + 1
 export const invCatColor = (d: FinanzasData, id: string) =>
   PALETTE[Math.max(0, (d.invCats ?? []).findIndex((c) => c.id === id)) % PALETTE.length]
 
@@ -63,5 +55,3 @@ export const savingTotal = (d: FinanzasData) =>
   (d.savingEntries ?? []).reduce((s, e) => s + e.m, 0)
 export const savingPotTotal = (d: FinanzasData, potId: string) =>
   (d.savingEntries ?? []).filter((e) => e.potId === potId).reduce((s, e) => s + e.m, 0)
-export const nextSavingId = (d: FinanzasData) =>
-  Math.max(0, ...(d.savingEntries ?? []).map((e) => e.id)) + 1

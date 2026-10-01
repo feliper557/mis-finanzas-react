@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useData } from '../context/DataContext'
 import { Card, H3, Bar, Btn, SectionTitle } from '../components/ui'
 import { Sheet, Field, inputCls } from '../components/Sheet'
-import { fmt, monthLabel, mTotal, mPagado, mPendiente, mTotalGroup, spentCat, catColor, nextTxId, groupCats, savingPotTotal, savingTotalMonth, nextSavingId } from '../lib/calc'
+import { fmt, monthLabel, mTotal, mPagado, mPendiente, mTotalGroup, spentCat, catColor, newId, groupCats, savingPotTotal, savingTotalMonth } from '../lib/calc'
 import type { CatGroup, Tx } from '../types'
 
 const GROUPS: { id: CatGroup; label: string; color: string }[] = [
@@ -20,7 +20,7 @@ type SheetState =
   | null
 
 export function Presupuestos() {
-  const { data, curMes, setCurMes } = useData()
+  const { data, curMes, setCurMes, mutate } = useData()
   const [openEnv, setOpenEnv] = useState<string | null>(null)
   const [activeGroup, setActiveGroup] = useState<CatGroup>('fijos')
   const [sheet, setSheet] = useState<SheetState>(null)
@@ -33,6 +33,16 @@ export function Presupuestos() {
   const disponible = m.ing - tot - ahorroMes
 
   const cats = groupCats(data, activeGroup)
+
+  const eliminarMes = () => {
+    if (data.months.length <= 1) { alert('Debe quedar al menos un mes.'); return }
+    if (!confirm(`¿Eliminar ${monthLabel(curMes)} y todos sus gastos? Esta acción no se puede deshacer.`)) return
+    mutate((d) => {
+      d.tx = d.tx.filter((t) => t.k !== curMes)
+      d.months = d.months.filter((x) => x.k !== curMes)
+    })
+    setCurMes(data.months.filter((x) => x.k !== curMes).slice(-1)[0].k)
+  }
 
   return (
     <div>
@@ -53,6 +63,7 @@ export function Presupuestos() {
           </select>
         </label>
         <Btn variant="ghost" className="text-sm" onClick={() => setSheet({ k: 'mes' })}>+ Mes</Btn>
+        <Btn variant="ghost" className="text-sm" onClick={eliminarMes}>🗑</Btn>
       </div>
 
       {/* Cards resumen global */}
@@ -254,7 +265,7 @@ function TxForm({ tx, cat, onClose }: { tx?: Tx; cat?: string; onClose: () => vo
     const obj = { d, c: c.trim() || '(sin nombre)', m: Number(m) || 0, cat: cId, pagado: pag }
     mutate((data2) => {
       if (editing) { const t = data2.tx.find((x) => x.id === tx!.id); if (t) Object.assign(t, obj) }
-      else data2.tx.push({ id: nextTxId(data2), k: curMes, ...obj })
+      else data2.tx.push({ id: newId(), k: curMes, ...obj })
     })
     onClose()
   }
@@ -465,6 +476,15 @@ function MesForm({ onClose }: { onClose: () => void }) {
     mutate((d) => {
       d.months.push({ k, ing: Number(ing) || 0, proj: false })
       d.months.sort((a, b) => a.k.localeCompare(b.k))
+
+      const prevMonth = d.months.filter((x) => x.k < k).sort((a, b) => b.k.localeCompare(a.k))[0]
+      if (prevMonth) {
+        const fijosIds = new Set(d.cats.filter((c) => c.group === 'fijos').map((c) => c.id))
+        const fijosPrev = d.tx.filter((t) => t.k === prevMonth.k && fijosIds.has(t.cat))
+        fijosPrev.forEach((t) => {
+          d.tx.push({ id: newId(), k, c: t.c, m: t.m, cat: t.cat, pagado: false })
+        })
+      }
     })
     setCurMes(k)
     onClose()
@@ -487,7 +507,7 @@ function MesForm({ onClose }: { onClose: () => void }) {
 
 type SavingSheet =
   | { k: 'pot'; potId: string | null }
-  | { k: 'entry'; potId: string; entryId?: number }
+  | { k: 'entry'; potId: string; entryId?: string }
   | null
 
 const SAVING_PALETTE = ['#34d399', '#60a5fa', '#f59e0b', '#a78bfa', '#fb7185', '#22d3ee']
@@ -663,7 +683,7 @@ function PotForm({ potId, onClose }: { potId: string | null; onClose: () => void
   )
 }
 
-function SavingEntryForm({ potId, entryId, onClose }: { potId: string; entryId?: number; onClose: () => void }) {
+function SavingEntryForm({ potId, entryId, onClose }: { potId: string; entryId?: string; onClose: () => void }) {
   const { data, mutate } = useData()
   const editing = entryId != null
   const cur = editing ? (data.savingEntries ?? []).find((e) => e.id === entryId) : undefined
@@ -681,7 +701,7 @@ function SavingEntryForm({ potId, entryId, onClose }: { potId: string; entryId?:
         const idx = data2.savingEntries.findIndex((e) => e.id === entryId)
         if (idx !== -1) data2.savingEntries[idx] = { id: entryId!, potId, nota: nota.trim(), m: monto, d }
       } else {
-        data2.savingEntries.push({ id: nextSavingId(data2), potId, nota: nota.trim(), m: monto, d })
+        data2.savingEntries.push({ id: newId(), potId, nota: nota.trim(), m: monto, d })
       }
     })
     onClose()
