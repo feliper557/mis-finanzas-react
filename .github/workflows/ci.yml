@@ -122,6 +122,7 @@ jobs:
             --region "$GCP_REGION" \
             --platform managed \
             --allow-unauthenticated \
+            --service-account "misfinanzas-api@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com" \
             --port 8080 \
             --memory 512Mi \
             --cpu 1 \

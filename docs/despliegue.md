@@ -65,25 +65,32 @@ printf '%s' 'Host=ep-xxx-pooler...;Maximum Pool Size=5' \
   | gcloud secrets create neon-connection-string --data-file=-
 ```
 
-Cuenta de servicio para el despliegue, con permisos mínimos:
+Dos cuentas de servicio con papeles distintos: una **despliega** desde GitHub y otra es la
+identidad con la que **corre** el servicio. Separarlas evita que la credencial guardada en un
+secreto de GitHub sea también la que puede leer la base de datos.
 
 ```bash
-PROJECT=misfinanzas-app
-SA=despliegue-github@$PROJECT.iam.gserviceaccount.com
+PROJECT=<tu-id-de-proyecto>
+DEPLOY=despliegue-github@$PROJECT.iam.gserviceaccount.com
+RUNTIME=misfinanzas-api@$PROJECT.iam.gserviceaccount.com
 
 gcloud iam service-accounts create despliegue-github --display-name="Despliegue desde GitHub"
+gcloud iam service-accounts create misfinanzas-api   --display-name="Identidad de la API"
 
-for ROL in roles/run.admin roles/artifactregistry.writer roles/iam.serviceAccountUser; do
-  gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:$SA" --role="$ROL"
-done
+# Quien despliega: publicar imagenes y administrar Cloud Run. Nada mas.
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:$DEPLOY" --role=roles/run.admin
+gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:$DEPLOY" --role=roles/artifactregistry.writer
 
-# El servicio de Cloud Run necesita leer el secreto en tiempo de ejecución.
-NUM=$(gcloud projects describe $PROJECT --format='value(projectNumber)')
+# Permiso para desplegar "en nombre de" la identidad de ejecucion, acotado a esa cuenta
+# concreta en lugar de a todo el proyecto.
+gcloud iam service-accounts add-iam-policy-binding $RUNTIME \
+  --member="serviceAccount:$DEPLOY" --role=roles/iam.serviceAccountUser
+
+# La identidad de ejecucion solo puede leer ESE secreto. Ningun otro permiso.
 gcloud secrets add-iam-policy-binding neon-connection-string \
-  --member="serviceAccount:$NUM-compute@developer.gserviceaccount.com" \
-  --role=roles/secretmanager.secretAccessor
+  --member="serviceAccount:$RUNTIME" --role=roles/secretmanager.secretAccessor
 
-gcloud iam service-accounts keys create clave.json --iam-account=$SA
+gcloud iam service-accounts keys create clave.json --iam-account=$DEPLOY
 ```
 
 > La clave descargada es una credencial de larga duración: pégala en GitHub y **borra `clave.json` del disco**. Cuando tengas el despliegue funcionando, merece la pena cambiarla por *Workload Identity Federation*, que no deja ninguna clave que se pueda filtrar.
