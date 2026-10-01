@@ -23,6 +23,11 @@ jobs:
 
       # pg_dump tiene que ser de la MISMA version mayor que el servidor o se niega a trabajar.
       # Usar la imagen oficial evita depender de la version que traiga el runner.
+      #
+      # La cadena del secreto debe llevar "?sslmode=verify-full&sslrootcert=system" y el host
+      # SIN "-pooler": libpq busca el certificado raiz en ~/.postgresql/root.crt y falla si no
+      # se le dice que use el almacen del sistema, y el agrupador de Neon no admite algunas
+      # operaciones del volcado.
       - name: Volcar la base
         env:
           CADENA: ${{ secrets.NEON_CONNECTION_STRING_PSQL }}

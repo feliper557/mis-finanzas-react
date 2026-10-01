@@ -33,12 +33,16 @@ Hay que guardarla en **dos formas**, porque .NET y `pg_dump` hablan distinto:
 | Secreto | Forma | Extremo |
 |---|---|---|
 | `NEON_CONNECTION_STRING` | `Host=ep-xxxx-pooler.us-east-1.aws.neon.tech;Database=misfinanzas;Username=<usuario>;Password=<clave>;SSL Mode=VerifyFull;Maximum Pool Size=5` | **con** `-pooler` |
-| `NEON_CONNECTION_STRING_PSQL` | La URL tal cual la da Neon, pero quitando `-pooler` del host | **sin** `-pooler` |
+| `NEON_CONNECTION_STRING_PSQL` | La URL de Neon quitando `-pooler` del host y con `?sslmode=verify-full&sslrootcert=system` | **sin** `-pooler` |
 
 Tres detalles que ahorran un rato de depuración:
 
 - **La API usa el extremo con `-pooler`.** Cloud Run puede abrir varias instancias y el agrupador de Neon evita agotar conexiones.
 - **`pg_dump` usa el extremo SIN `-pooler`**: el agrupador no admite algunas operaciones del volcado.
+- **`sslrootcert=system` es obligatorio en la URL de `pg_dump`.** Es una peculiaridad de `libpq`:
+  con `sslmode=verify-full` busca el certificado raíz en `~/.postgresql/root.crt` y falla si no
+  está, en vez de usar el almacén del sistema. Npgsql no tiene ese problema, por eso la cadena
+  de .NET no lo necesita. (Comprobado contra la base real.)
 - **`SSL Mode=VerifyFull`, no `Trust Server Certificate=true`.** El certificado de Neon está firmado por una autoridad pública y la imagen de la API lleva el almacén de certificados raíz, así que se puede validar de verdad en lugar de aceptar cualquier certificado. Si alguna vez fallara, el problema estaría en el almacén de certificados, no en la validación: no la desactives para salir del paso.
 
 Neon suspende la base cuando no se usa. No hay que hacer nada: la API ya lleva `EnableRetryOnFailure(5)` y absorbe el despertar sin mostrar error.
