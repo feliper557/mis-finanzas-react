@@ -14,6 +14,12 @@ function traduce(e: { code?: string; message?: string }): string {
     'auth/popup-closed-by-user': 'Cerraste la ventana de Google',
     'auth/invalid-credential': 'Correo o contraseña incorrectos',
     'auth/network-request-failed': 'Sin conexión a internet',
+    // Falta el dominio en Firebase → Authentication → Settings → Authorized domains.
+    // El mensaje original es un párrafo en inglés que no dice qué hacer.
+    'auth/unauthorized-domain': 'Este dominio no está autorizado en Firebase. Añádelo en Authentication → Settings → Authorized domains.',
+    'auth/popup-blocked': 'El navegador bloqueó la ventana de Google. Permite las ventanas emergentes para este sitio.',
+    'auth/operation-not-allowed': 'Ese método de inicio de sesión está desactivado en Firebase',
+    'auth/too-many-requests': 'Demasiados intentos. Espera unos minutos.',
   }
   return map[e?.code ?? ''] ?? e?.message ?? 'Error desconocido'
 }
