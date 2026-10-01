@@ -15,7 +15,7 @@
 # Sustituir por la URL real del servicio al desplegarlo por primera vez.
 [[redirects]]
   from = "/api/*"
-  to = "https://misfinanzas-api-XXXXXXXX-ue.a.run.app/api/:splat"
+  to = "https://misfinanzas-api-vqxuvyxbya-ue.a.run.app/api/:splat"
   status = 200
   force = true
 

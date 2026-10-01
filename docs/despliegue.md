@@ -7,7 +7,7 @@ Navegador
    │
    ├── https://<tu-sitio>.netlify.app        -> Netlify (SPA estática, gratis)
    │        └── /api/*  (reenvío, mismo origen, sin CORS)
-   │                └── https://misfinanzas-api-....run.app   -> Cloud Run (API .NET)
+   │                └── https://misfinanzas-api-vqxuvyxbya-ue.a.run.app  -> Cloud Run
    │                            └── Neon (PostgreSQL gestionado, gratis)
    └── Firebase Authentication (solo el inicio de sesión)
 ```
@@ -135,7 +135,7 @@ Guarda esa URL: hace falta en el paso siguiente.
 ```toml
 [[redirects]]
   from = "/api/*"
-  to = "https://misfinanzas-api-XXXXXXXX-ue.a.run.app/api/:splat"
+  to = "https://misfinanzas-api-vqxuvyxbya-ue.a.run.app/api/:splat"
 ```
 
 2. En *Site settings → Environment variables*, añadir las cinco `VITE_FIREBASE_*`. **`VITE_API_URL` se deja sin definir**: la SPA llama a su propio origen y Netlify reenvía.
