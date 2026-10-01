@@ -8,6 +8,12 @@
 [build.environment]
   NODE_VERSION = "22"
 
+  # Las claves web de Firebase son PUBLICAS por diseno: el navegador las necesita, y Vite las
+  # incrusta en el paquete. El escaner de secretos de Netlify las encontraria ahi y daria el
+  # despliegue por fallido, asi que se excluyen explicitamente. Lo que protege la cuenta son
+  # los dominios autorizados de Firebase y la validacion del token en la API, no estas claves.
+  SECRETS_SCAN_OMIT_KEYS = "VITE_FIREBASE_API_KEY,VITE_FIREBASE_AUTH_DOMAIN,VITE_FIREBASE_PROJECT_ID,VITE_FIREBASE_SENDER_ID,VITE_FIREBASE_APP_ID"
+
 # Las peticiones a /api/* se reenvian a Cloud Run conservando el MISMO ORIGEN. Dos ventajas:
 # CORS no interviene (ni preflight, ni cabeceras que mantener) y la URL del backend no queda
 # incrustada en el paquete del navegador, asi que cambiar de proveedor no obliga a recompilar.
