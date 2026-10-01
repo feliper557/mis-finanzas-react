@@ -7,7 +7,11 @@ name: Respaldo de la base
 
 on:
   schedule:
-    # 04:15 UTC, cada dia.
+    # 04:15 UTC, cada dia. Diario y no cada varios dias porque no cuesta nada (el volcado
+    # comprimido ronda los 10 KB) y la ventana de perdida baja de tres dias a uno.
+    #
+    # OJO: GitHub DESACTIVA los flujos programados tras 60 dias sin actividad en el
+    # repositorio. Avisa por correo y hay que reactivarlo a mano desde la pestana Actions.
     - cron: '15 4 * * *'
   workflow_dispatch:
 
@@ -35,6 +39,25 @@ jobs:
           docker run --rm -e PGCONN="$CADENA" postgres:17-alpine \
             sh -c 'pg_dump --no-owner --no-privileges "$PGCONN"' | gzip > volcado.sql.gz
           ls -lh volcado.sql.gz
+
+      # Un volcado vacio que se da por bueno es peor que no tener respaldo: el fallo solo se
+      # descubre el dia que hay que restaurar. Si la conexion se corta a mitad, pg_dump puede
+      # dejar un archivo valido pero incompleto, asi que se comprueban tamano y contenido.
+      - name: Comprobar que el volcado tiene datos
+        run: |
+          BYTES=$(stat -c%s volcado.sql.gz)
+          echo "tamano comprimido: $BYTES bytes"
+          [ "$BYTES" -gt 1000 ] || { echo "El volcado es sospechosamente pequeno."; exit 1; }
+
+          for TABLA in users months transactions categories saving_entries inv_items loans; do
+            gunzip -c volcado.sql.gz | grep -q "CREATE TABLE public.$TABLA"               || { echo "Falta la tabla $TABLA en el volcado."; exit 1; }
+          done
+
+          COPIAS=$(gunzip -c volcado.sql.gz | grep -c '^COPY public\.' || true)
+          echo "bloques COPY encontrados: $COPIAS"
+          [ "$COPIAS" -ge 7 ] || { echo "Faltan bloques de datos."; exit 1; }
+          echo "Volcado integro."
+
 
       # Se cifra antes de salir de este trabajo: un artefacto de GitHub lo puede descargar
       # cualquiera con acceso al repositorio, y esto es el historial financiero completo.
