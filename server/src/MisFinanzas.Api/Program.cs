@@ -48,7 +48,10 @@ var app = builder.Build();
 
 if (builder.Configuration.GetValue("Database:AutoMigrate", false))
 {
-    // Seguro solo con una replica, que es el caso en el VPS. Igual que en Lactumama.
+    // Desactivado por defecto a proposito. En Cloud Run el servicio escala a cero y puede
+    // levantar varias instancias a la vez, asi que migrar al arrancar las pondria a competir
+    // sobre el mismo esquema. Las migraciones las aplica el pipeline antes de desplegar la
+    // revision nueva. Esta rama queda para desarrollo local.
     using var scope = app.Services.CreateScope();
     await scope.ServiceProvider.GetRequiredService<FinanzasDbContext>().Database.MigrateAsync();
 }

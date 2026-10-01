@@ -2,16 +2,18 @@
 
 Aplicación personal de presupuesto, gastos, inversiones, ahorros y préstamos.
 
-SPA en **React 19 + Vite + Tailwind 4** sobre una API en **ASP.NET Core 10 + EF Core + PostgreSQL 17**, con **Firebase Authentication** para el inicio de sesión. Se despliega en un VPS de Hostinger que comparte con otra aplicación (Lactumama).
+SPA en **React 19 + Vite + Tailwind 4** sobre una API en **ASP.NET Core 10 + EF Core + PostgreSQL 17**, con **Firebase Authentication** para el inicio de sesión.
 
 ```
-Internet :443 ──> caddy (de Lactumama, único servicio en 80/443)
-                   ├── <dominio-lactumama>   -> (Lactumama)
-                   └── finanzas.<dominio>    -> misfinanzas-web :80  (nginx + SPA)
-                                                    └── /api/ -> misfinanzas-api :8080
-                                                                      └── PostgreSQL 17
-                                                                          (base "misfinanzas")
+Navegador
+   ├── Netlify (SPA estática)
+   │      └── /api/*  reenviado al mismo origen, sin CORS
+   │             └── Cloud Run (API .NET, escala a cero)
+   │                    └── Neon (PostgreSQL gestionado)
+   └── Firebase Authentication (solo el inicio de sesión)
 ```
+
+Las tres piezas caben en capas gratuitas. El precio es que **el primer acceso del día tarda unos 3-5 segundos** mientras despiertan el contenedor y la base: aceptable para una app personal, y lo que permite que no cueste nada.
 
 ## Estructura
 
@@ -23,8 +25,8 @@ Internet :443 ──> caddy (de Lactumama, único servicio en 80/443)
 | `server/src/MisFinanzas.Api/Data/FinanzasMapper.cs` | **La pieza central**: traduce entre las tablas y el documento que espera el cliente. |
 | `server/tools/MisFinanzas.Importer/` | Reconstruye la base desde un volcado de Firestore. Se usa una vez. |
 | `server/tests/` | Pruebas de integración contra PostgreSQL real (Testcontainers). |
-| `deploy/` | Compose de producción, bloque de Caddy, respaldo y plantilla de entorno. |
-| `docs/handoff-lactumama.md` | **Los cambios que hay que hacer en Lactumama.** No se ejecutan desde aquí. |
+| `docs/despliegue.md` | **El runbook de puesta en marcha**: Neon, Cloud Run, Netlify, importación y respaldo. |
+| `.github/workflows/` | CI (pruebas, imagen, migraciones y despliegue) y el respaldo diario cifrado. |
 
 ## Por qué la API habla en documentos y no en recursos
 
@@ -34,22 +36,13 @@ En vez de eso, **la API guarda en tablas relacionales pero conversa en documento
 
 ## Desarrollo
 
-### Todo en Docker
-
 ```bash
 cp .env.example .env    # rellenar con los valores de la consola de Firebase
-docker compose up --build
-# SPA en http://localhost:5174 · API en http://localhost:8081
+docker compose up --build       # PostgreSQL en 5433, API en 8081
+npm install && npm run dev      # SPA en http://localhost:5173
 ```
 
-### El frontend aparte (recarga en caliente)
-
-```bash
-docker compose up db misfinanzas-api    # base + API
-npm install && npm run dev              # http://localhost:5173
-```
-
-Con `VITE_API_URL=http://localhost:8081` en `.env`. En producción esa variable va vacía porque la SPA y la API comparten origen tras nginx y CORS no interviene.
+En local la SPA llama a `VITE_API_URL`. En producción esa variable **se deja vacía**: Netlify reenvía `/api/*` a Cloud Run, así que comparten origen, CORS no interviene y la URL del backend no queda incrustada en el paquete del navegador.
 
 ### Comprobaciones
 
@@ -68,7 +61,7 @@ dotnet tool restore
 dotnet dotnet-ef migrations add <Nombre> --project src/MisFinanzas.Api --output-dir Data/Migrations
 ```
 
-Se aplican solas al arrancar la API (`Database__AutoMigrate=true`). Es seguro porque hay una única réplica.
+En local las aplica la API al arrancar (`Database__AutoMigrate=true`). **En producción no**: las aplica el pipeline antes de desplegar la revisión nueva, porque Cloud Run puede levantar varias instancias a la vez y competirían sobre el mismo esquema.
 
 ## Migración de los datos desde Firestore
 
@@ -108,17 +101,15 @@ Esto corrige un fallo real de la versión anterior: con Firestore cada guardado 
 
 ## Despliegue
 
-Ver `deploy/` y, sobre todo, **`docs/handoff-lactumama.md`**.
+El runbook completo está en **`docs/despliegue.md`**. Cada push a `main` despliega solo: las pruebas tienen que pasar, luego se publica la imagen, se aplican las migraciones en Neon y se despliega la revisión.
 
-Dos reglas que no se negocian:
-
-- **Nunca se compila en el servidor.** Tiene 1 vCPU compartido; un `docker build` de .NET o Vite dejaría sin responder también a Lactumama. Las imágenes las construye GitHub Actions y se publican en GHCR; el VPS solo hace `pull`.
-- **Este proyecto no toca Lactumama.** Comparten Caddy y PostgreSQL, pero todo cambio que recaiga sobre ella está documentado en el entregable, con verificación y reversión, para ejecutarse desde su propio proyecto.
-
-Reversión de un despliegue:
+Reversión: Cloud Run conserva las revisiones anteriores, así que volver atrás es redirigir el tráfico, sin reconstruir nada.
 
 ```bash
-cd /opt/misfinanzas
-echo "IMAGE_TAG=<sha-anterior>" > .image-tag
-docker compose --env-file .env --env-file .image-tag -f docker-compose.prod.yml up -d
+gcloud run revisions list --service misfinanzas-api --region us-east1
+gcloud run services update-traffic misfinanzas-api --region us-east1 --to-revisions=<anterior>=100
 ```
+
+### Respaldos
+
+`.github/workflows/backup.yml` hace un volcado diario, lo cifra con `age` y lo guarda como artefacto con 90 días de retención. Neon tiene sus propias copias, pero en la capa gratuita la ventana es corta y vive dentro del mismo proveedor; este volcado se restaura en cualquier PostgreSQL.

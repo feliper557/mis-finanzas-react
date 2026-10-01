@@ -1,0 +1,54 @@
+name: Respaldo de la base
+
+# Neon hace sus propias copias, pero en la capa gratuita la ventana de recuperacion a un punto
+# en el tiempo es corta y vive dentro del mismo proveedor. Esto es dinero: conviene tener un
+# volcado logico propio, cifrado y fuera de Neon, que ademas permite restaurar en CUALQUIER
+# PostgreSQL si algun dia hay que mudarse.
+
+on:
+  schedule:
+    # 04:15 UTC, cada dia.
+    - cron: '15 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  volcado:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Instalar age
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq age
+
+      # pg_dump tiene que ser de la MISMA version mayor que el servidor o se niega a trabajar.
+      # Usar la imagen oficial evita depender de la version que traiga el runner.
+      - name: Volcar la base
+        env:
+          CADENA: ${{ secrets.NEON_CONNECTION_STRING_PSQL }}
+        run: |
+          docker run --rm -e PGCONN="$CADENA" postgres:17-alpine \
+            sh -c 'pg_dump --no-owner --no-privileges "$PGCONN"' | gzip > volcado.sql.gz
+          ls -lh volcado.sql.gz
+
+      # Se cifra antes de salir de este trabajo: un artefacto de GitHub lo puede descargar
+      # cualquiera con acceso al repositorio, y esto es el historial financiero completo.
+      - name: Cifrar
+        env:
+          DESTINATARIO: ${{ secrets.AGE_RECIPIENT }}
+        run: |
+          age --recipient "$DESTINATARIO" volcado.sql.gz > "misfinanzas-$(date +%F).sql.gz.age"
+          rm volcado.sql.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: respaldo-${{ github.run_id }}
+          path: '*.sql.gz.age'
+          retention-days: 90
+
+# Restaurar:
+#   age --decrypt -i clave-privada.key misfinanzas-<fecha>.sql.gz.age | gunzip | psql "<cadena>"
+#
+# La clave PRIVADA de age se guarda fuera de GitHub (gestor de contrasenas). En los secretos
+# del repositorio solo va la publica, en AGE_RECIPIENT: con ella se puede cifrar, no descifrar.
+# Conviene probar una restauracion sobre una base desechable antes de necesitarla de verdad.

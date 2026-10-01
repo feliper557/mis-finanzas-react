@@ -1,0 +1,26 @@
+# Netlify sigue sirviendo la SPA. Solo cambia de donde vienen los datos: antes Firestore
+# directo desde el navegador, ahora la API en Cloud Run.
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# Las peticiones a /api/* se reenvian a Cloud Run conservando el MISMO ORIGEN. Dos ventajas:
+# CORS no interviene (ni preflight, ni cabeceras que mantener) y la URL del backend no queda
+# incrustada en el paquete del navegador, asi que cambiar de proveedor no obliga a recompilar.
+#
+# Sustituir por la URL real del servicio al desplegarlo por primera vez.
+[[redirects]]
+  from = "/api/*"
+  to = "https://misfinanzas-api-XXXXXXXX-ue.a.run.app/api/:splat"
+  status = 200
+  force = true
+
+# La SPA no tiene enrutador, pero esto evita un 404 si alguien entra por una ruta profunda.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

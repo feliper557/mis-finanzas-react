@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+# La región se elige por latencia desde Colombia, no por precio: la capa gratuita de Cloud Run
+# no depende de la región.
+env:
+  GCP_REGION: us-east1
+  SERVICIO: misfinanzas-api
+  REPO_ARTEFACTOS: misfinanzas
+
 jobs:
   backend:
     name: Backend (.NET 10)
@@ -27,7 +34,7 @@ jobs:
         run: dotnet build --no-restore --configuration Release
 
       # Las pruebas de integracion levantan PostgreSQL con Testcontainers, que usa el Docker
-      # que ya trae el runner. Si alguna falla, el despliegue no ocurre.
+      # que ya trae el runner. Si alguna falla, no se despliega nada.
       - name: Probar
         run: >
           dotnet test --no-build --configuration Release
@@ -55,91 +62,88 @@ jobs:
       - run: npm run lint
       - run: npm run build
 
+  # La SPA la despliega Netlify por su cuenta al detectar el push; aqui solo va la API.
   deploy:
-    name: Desplegar en el VPS
+    name: Desplegar la API en Cloud Run
     needs: [backend, frontend]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
     steps:
       - uses: actions/checkout@v4
 
-      # Los nombres de paquete de GHCR solo admiten minusculas y el del repositorio no
-      # tiene por que estarlo, asi que se normaliza antes de etiquetar.
-      - name: Calcular el nombre de las imagenes
-        id: img
-        run: echo "repo=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-
-      - name: Autenticar en GHCR
-        uses: docker/login-action@v3
+      - uses: google-github-actions/auth@v2
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      # El driver por defecto de docker no sabe exportar cache; sin este paso, el
-      # "cache-to: type=gha" de los dos builds siguientes aborta la construccion.
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Autenticar Docker contra Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Calcular el nombre de la imagen
+        id: img
+        run: |
+          echo "ref=${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPO_ARTEFACTOS }}/api" >> "$GITHUB_OUTPUT"
+
       - name: Preparar Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Ambas imagenes se construyen aqui y NUNCA en el servidor: compilar .NET o Vite en
-      # 1 vCPU dejaria sin responder tambien a Lactumama, que comparte el mismo nucleo.
-      - name: Construir y publicar la imagen de la API
+      - name: Construir y publicar la imagen
         uses: docker/build-push-action@v6
         with:
           context: ./server
           push: true
           tags: |
-            ${{ steps.img.outputs.repo }}/api:${{ github.sha }}
-            ${{ steps.img.outputs.repo }}/api:latest
+            ${{ steps.img.outputs.ref }}:${{ github.sha }}
+            ${{ steps.img.outputs.ref }}:latest
           cache-from: type=gha,scope=api
           cache-to: type=gha,mode=max,scope=api
 
-      # Vite incrusta las VITE_* en el paquete al compilar, por eso viajan como build args.
-      # VITE_API_URL va vacio a proposito: la SPA y la API comparten origen tras nginx.
-      - name: Construir y publicar la imagen del cliente
-        uses: docker/build-push-action@v6
+      # Las migraciones se aplican AQUI, antes de publicar la revision nueva, y no al arrancar
+      # la API: Cloud Run escala a cero y puede levantar varias instancias a la vez, que
+      # competirian sobre el mismo esquema. Neon es accesible desde el runner, asi que este es
+      # el unico punto donde la migracion ocurre una sola vez.
+      - uses: actions/setup-dotnet@v4
         with:
-          context: .
-          push: true
-          build-args: |
-            VITE_FIREBASE_API_KEY=${{ vars.VITE_FIREBASE_API_KEY }}
-            VITE_FIREBASE_AUTH_DOMAIN=${{ vars.VITE_FIREBASE_AUTH_DOMAIN }}
-            VITE_FIREBASE_PROJECT_ID=${{ vars.VITE_FIREBASE_PROJECT_ID }}
-            VITE_FIREBASE_SENDER_ID=${{ vars.VITE_FIREBASE_SENDER_ID }}
-            VITE_FIREBASE_APP_ID=${{ vars.VITE_FIREBASE_APP_ID }}
-            VITE_API_URL=
-          tags: |
-            ${{ steps.img.outputs.repo }}/web:${{ github.sha }}
-            ${{ steps.img.outputs.repo }}/web:latest
-          cache-from: type=gha,scope=web
-          cache-to: type=gha,mode=max,scope=web
+          dotnet-version: '10.0.x'
 
-      # Con una unica replica, la API aplica las migraciones al arrancar (Database__AutoMigrate)
-      # sin riesgo de que dos instancias migren a la vez.
-      - name: Desplegar por SSH
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          script: |
-            # La accion ya no admite script_stop, asi que el corte al primer fallo se pide aqui:
-            # sin el, un pull fallido seguiria hasta el up y el despliegue se daria por bueno.
-            set -eu
+      - name: Aplicar migraciones en Neon
+        working-directory: server
+        env:
+          ConnectionStrings__Default: ${{ secrets.NEON_CONNECTION_STRING }}
+        run: |
+          dotnet tool restore
+          dotnet dotnet-ef database update --project src/MisFinanzas.Api
 
-            # SOLO el proyecto misfinanzas. Ningun comando de este pipeline puede tocar
-            # /opt/lactumama: la otra aplicacion no debe verse afectada en ningun momento.
-            cd /opt/misfinanzas
-            printf 'IMAGE_TAG=%s\n' "${{ github.sha }}" > .image-tag
-            compose="docker compose --env-file .env --env-file .image-tag -f docker-compose.prod.yml"
-            $compose pull
-            $compose up -d --remove-orphans
+      - name: Desplegar en Cloud Run
+        run: |
+          gcloud run deploy "$SERVICIO" \
+            --image "${{ steps.img.outputs.ref }}:${{ github.sha }}" \
+            --region "$GCP_REGION" \
+            --platform managed \
+            --allow-unauthenticated \
+            --port 8080 \
+            --memory 512Mi \
+            --cpu 1 \
+            --cpu-boost \
+            --min-instances 0 \
+            --max-instances 2 \
+            --concurrency 40 \
+            --timeout 60s \
+            --set-env-vars "ASPNETCORE_ENVIRONMENT=Production,Database__AutoMigrate=false,Firebase__ProjectId=${{ secrets.FIREBASE_PROJECT_ID }}" \
+            --set-secrets "ConnectionStrings__Default=neon-connection-string:latest" \
+            --quiet
 
-            # Solo elimina imagenes colgantes (sin etiqueta y sin contenedor que las use), asi
-            # que no puede afectar a nada que Lactumama tenga en marcha. Su propio pipeline
-            # ejecuta exactamente lo mismo. NUNCA usar "docker system prune", que si borraria
-            # redes y volumenes compartidos.
-            docker image prune -f
+      # --allow-unauthenticated abre el servicio a internet, pero no los datos: cada endpoint
+      # exige un token valido de Firebase y filtra por el uid. Es la misma postura que tenia la
+      # app con Firestore.
+      #
+      # --min-instances 0 es lo que mantiene la factura en cero a cambio de unos segundos de
+      # arranque en frio. Subirlo a 1 elimina la espera y empieza a costar.
+      #
+      # --max-instances 2 acota tanto el gasto como las conexiones abiertas contra Neon.
+      - name: Comprobar que la revision responde
+        run: |
+          URL=$(gcloud run services describe "$SERVICIO" --region "$GCP_REGION" --format 'value(status.url)')
+          echo "Servicio en $URL"
+          curl -fsS --retry 5 --retry-all-errors --retry-delay 3 "$URL/health"
